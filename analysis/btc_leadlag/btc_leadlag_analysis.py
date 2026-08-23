@@ -71,19 +71,49 @@ def load_panels():
 
 
 def load_hype_extension():
-    """Optional user-supplied daily HYPE closes for the post-2026-05-23 gap.
+    """Optional user-supplied daily HYPE closes covering the post-CM period.
 
     Produce data/hype_daily_extension.csv with fetch_hype_extension.py (run
     outside the restricted sandbox) or any source: one row per day, columns
-    date, hype_usd (~00:00 UTC prices — the API panel's convention, so the
-    BTC leg pairs against api_r["btc"]). Returns hype log-returns or None.
+    date, hype_usd. A trailing duplicate date (CoinGecko appends an intraday
+    "current" point to its daily series) is dropped, keeping the daily point.
+
+    Timestamp convention, calibrated on the 87-day overlap with the CM panel:
+    these prices sit on the same daily grid as data/daily_panel_api.csv, so
+    the returns pair SAME-DAY with api_r["btc"] (corr 0.51 vs -0.23 for a
+    one-day-shifted BTC leg — pairing the wrong leg would fabricate a
+    one-day lead). Returns hype log-returns, or None if the file is absent.
     """
     ext_path = os.path.join(DATA, "hype_daily_extension.csv")
     if not os.path.exists(ext_path):
         return None
-    ext = pd.read_csv(ext_path, parse_dates=["date"],
-                      index_col="date").sort_index()
+    ext = pd.read_csv(ext_path, parse_dates=["date"])
+    ext = ext.drop_duplicates("date", keep="first").set_index("date").sort_index()
     return np.log(ext["hype_usd"]).diff().rename("hype")
+
+
+def build_unified_hype(cm_r, ext_r):
+    """Splice CM-derived and extension HYPE returns onto one daily grid.
+
+    The CM community CSV carries HYPE market cap (and BTC PriceUSD) on row D
+    using the price CM publishes as reference rate D+1 — verified exactly:
+    CapMrktEstUSD[D] / ReferenceRateUSD[D+1] is constant at 238.4M, and
+    BTC PriceUSD[D] == ReferenceRateUSD[D+1]. Both legs share that shift, so
+    the CM-panel pairing is internally consistent; but to sit on the API
+    panel's grid the CM returns move forward one day. The overlap confirms
+    the alignment: corr(ext[D], cm[D-1]) = 0.994 over 87 days.
+
+    Returns (series, splice_date, overlap_corr).
+    """
+    cm_aligned = cm_r["hype"].shift(1)
+    if ext_r is None:
+        return cm_aligned, None, np.nan
+    ov = pd.DataFrame({"e": ext_r, "c": cm_aligned}).dropna()
+    corr = float(ov["e"].corr(ov["c"])) if len(ov) > 20 else np.nan
+    splice = ext_r.dropna().index.min()
+    unified = pd.concat([cm_aligned.loc[:splice - pd.Timedelta(days=1)],
+                         ext_r.dropna()]).sort_index()
+    return unified.rename("hype"), splice, corr
 
 
 # --------------------------------------------------------------------------- #
@@ -226,6 +256,31 @@ def pair_report(name, btc, alt, results, max_lag=7):
                                        j["alt"].rename("alt_t")])
     res["predictive_reg_t+1"] = pred
 
+    # A raw lag-1 cross-correlation is mechanically inflated by BTC's own
+    # autocorrelation: corr(btc_t, alt_{t+1}) ~ rho_btc(1) x corr0 even with
+    # no lead at all. Report that benchmark, and the regression that controls
+    # for the contemporaneous leg — only a surviving btc_t coefficient is a
+    # genuine lead. (Non-synchronous price sampling manufactures rho_btc(1);
+    # see the sampling_quality block.)
+    rho_b = float(j["btc"].autocorr(1))
+    res["lag1_mechanical_benchmark"] = {
+        "rho_btc_lag1": round(rho_b, 4),
+        "predicted_lag1_corr": round(rho_b * res["contemporaneous_corr"], 4),
+        "observed_lag1_corr": round(float(cc.loc[1, "corr"]), 4)}
+    res["predictive_reg_controlled"] = nw_reg(
+        j["alt"].shift(-1), [j["btc"].shift(-1).rename("btc_t1"),
+                             j["btc"].rename("btc_t"),
+                             j["alt"].rename("alt_t")])
+
+    # Sampling-quality flag for the BTC leg: daily crypto returns carry
+    # rho(1) near zero. A large positive rho(1) with VR(2) >> 1 means the
+    # price snapshots are not evenly spaced, which fabricates lead-lag.
+    v1 = float(j["btc"].var())
+    v2 = float(j["btc"].rolling(2).sum().dropna().var())
+    res["sampling_quality"] = {
+        "btc_rho1": round(rho_b, 4), "btc_variance_ratio_2d": round(v2 / (2 * v1), 4),
+        "suspect_nonsynchronous": bool(rho_b > 0.2 and v2 / (2 * v1) > 1.2)}
+
     ev = event_study(j["btc"], j["alt"])
     res["event_study"] = json.loads(ev.to_json(orient="index"))
 
@@ -348,8 +403,17 @@ def main():
     # optional user-supplied extension covering the post-2026-05-23 gap
     hype_ext = load_hype_extension()
     if hype_ext is not None:
-        pair_report("HYPE_vs_BTC_extension", api_r["btc"], hype_ext, results)
-        extras_report("HYPE_vs_BTC_extension", api_r["btc"], hype_ext, results)
+        # gap window alone (what the CM panel could not see)
+        gap = hype_ext.loc["2026-05-24":]
+        pair_report("HYPE_vs_BTC_gap_only", api_r["btc"], gap, results)
+        # full history spliced onto one grid — the headline HYPE pair
+        uni, splice, ov_corr = build_unified_hype(cm_r, hype_ext)
+        results["meta"]["hype_splice"] = {
+            "splice_date": str(splice.date()), "overlap_corr": round(ov_corr, 4),
+            "note": "CM returns shifted +1d onto the API grid; see "
+                    "build_unified_hype docstring"}
+        pair_report("HYPE_vs_BTC_full", api_r["btc"], uni, results)
+        extras_report("HYPE_vs_BTC_full", api_r["btc"], uni, results)
     # SOL vs BTC on the API panel (freshest, through 2026-08-23)
     pair_report("SOL_vs_BTC_api", api_r["btc"], api_r["sol"], results)
     extras_report("SOL_vs_BTC_api", api_r["btc"], api_r["sol"], results)
@@ -378,8 +442,10 @@ def main():
     print(f"wrote {args.json}")
 
     # console digest
-    for k in ("HYPE_vs_BTC_cm", "SOL_vs_BTC_api", "SOL_vs_BTC_cm_long",
-              "ETH_vs_BTC_api"):
+    for k in ("HYPE_vs_BTC_cm", "HYPE_vs_BTC_full", "HYPE_vs_BTC_gap_only",
+              "SOL_vs_BTC_api", "SOL_vs_BTC_cm_long", "ETH_vs_BTC_api"):
+        if k not in results:
+            continue
         r = results[k]
         print(f"\n=== {k}  n={r['n']}  {r['window'][0]}..{r['window'][1]}")
         print(f"  corr0={r['contemporaneous_corr']:.3f}  "

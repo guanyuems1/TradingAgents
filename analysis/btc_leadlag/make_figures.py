@@ -61,8 +61,11 @@ def ccf(x, y, k):
 
 def fig_ccf(cm_r, api_r):
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2), sharey=True)
-    panels = [("HYPE vs BTC  (daily, Dec 2024 - May 2026)",
-               cm_r["btc"], cm_r["hype"]),
+    hype_uni, splice = unified_hype(cm_r)
+    hype_btc = api_r["btc"] if splice is not None else cm_r["btc"]
+    hype_title = ("HYPE vs BTC  (daily, Dec 2024 - Aug 2026)" if splice is not None
+                  else "HYPE vs BTC  (daily, Dec 2024 - May 2026)")
+    panels = [(hype_title, hype_btc, hype_uni),
               ("SOL vs BTC  (daily, Mar 2024 - Aug 2026)",
                api_r["btc"], api_r["sol"])]
     lags = range(-7, 8)
@@ -98,7 +101,9 @@ def fig_ccf(cm_r, api_r):
 
 def fig_event(cm_r, api_r):
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2), sharey=True)
-    panels = [("HYPE after big BTC days", cm_r["btc"], cm_r["hype"]),
+    hype_uni, splice = unified_hype(cm_r)
+    hype_btc = api_r["btc"] if splice is not None else cm_r["btc"]
+    panels = [("HYPE after big BTC days", hype_btc, hype_uni),
               ("SOL after big BTC days", api_r["btc"], api_r["sol"])]
     for ax, (title, b, a) in zip(axes, panels):
         j = pd.DataFrame({"b": b, "a": a}).dropna()
@@ -131,7 +136,9 @@ def fig_event(cm_r, api_r):
 def fig_equity(cm_r, api_r):
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.4))
     cost = 10 / 1e4
-    panels = [("HYPE strategies (net 10 bps/switch)", cm_r["btc"], cm_r["hype"]),
+    hype_uni, splice = unified_hype(cm_r)
+    hype_btc = api_r["btc"] if splice is not None else cm_r["btc"]
+    panels = [("HYPE strategies (net 10 bps/switch)", hype_btc, hype_uni),
               ("SOL strategies (net 10 bps/switch)", api_r["btc"], api_r["sol"])]
     for ax, (title, b, a) in zip(axes, panels):
         j = pd.DataFrame({"b": b, "a": a}).dropna()
@@ -170,47 +177,64 @@ def fig_equity(cm_r, api_r):
 def load_hype_extension():
     """Daily HYPE log-returns from data/hype_daily_extension.csv, or None.
 
-    The file is produced by fetch_hype_extension.py (run outside the
-    restricted sandbox); its ~00:00 UTC prices pair with the API panel's BTC.
+    Produced by fetch_hype_extension.py. A trailing duplicate date (an
+    intraday "current" point appended to the daily series) is dropped. The
+    prices sit on the API panel's daily grid, so they pair same-day with
+    api_r["btc"] — verified on the 87-day overlap with the CM panel.
     """
     ext_path = os.path.join(DATA, "hype_daily_extension.csv")
     if not os.path.exists(ext_path):
         return None
-    ext = pd.read_csv(ext_path, parse_dates=["date"],
-                      index_col="date").sort_index()
+    ext = pd.read_csv(ext_path, parse_dates=["date"])
+    ext = ext.drop_duplicates("date", keep="first").set_index("date").sort_index()
     return np.log(ext["hype_usd"]).diff()
+
+
+def unified_hype(cm_r):
+    """HYPE returns spliced onto the API panel's grid; see the analysis module.
+
+    CM rows carry the price CM labels as reference rate D+1, so CM returns
+    shift forward one day to sit on the API grid (overlap corr 0.994).
+    """
+    ext = load_hype_extension()
+    cm_aligned = cm_r["hype"].shift(1)
+    if ext is None:
+        return cm_aligned.dropna(), None
+    splice = ext.dropna().index.min()
+    uni = pd.concat([cm_aligned.loc[:splice - pd.Timedelta(days=1)],
+                     ext.dropna()]).sort_index()
+    return uni.dropna(), splice
 
 
 def fig_rolling(cm_r, api_r):
     fig, ax = plt.subplots(figsize=(11, 4.0))
+    hype_uni, splice = unified_hype(cm_r)
+    btc = api_r["btc"] if splice is not None else cm_r["btc"]
     series = [
         ("SOL-BTC", api_r["btc"].rolling(60, min_periods=45).corr(api_r["sol"]), BLUE),
         ("ETH-BTC", api_r["btc"].rolling(60, min_periods=45).corr(api_r["eth"]), MUTED),
-        ("HYPE-BTC", cm_r["btc"].rolling(60, min_periods=45).corr(cm_r["hype"]), ORANGE),
+        ("HYPE-BTC", btc.rolling(60, min_periods=45).corr(hype_uni), ORANGE),
     ]
     for lab, s, color in series:
         s = s.dropna()
         ax.plot(s.index, s.values, color=color, lw=2, label=lab)
-        ax.annotate(lab, (s.index[-1], s.iloc[-1]), xytext=(6, -3),
-                    textcoords="offset points", fontsize=9, color=color)
-    hype_ext = load_hype_extension()
-    hype_end = cm_r["hype"].dropna().index[-1]
-    if hype_ext is not None:
-        roll_ext = (api_r["btc"].rolling(60, min_periods=45)
-                    .corr(hype_ext).dropna())
-        roll_ext = roll_ext.loc[hype_end:]
-        ax.plot(roll_ext.index, roll_ext.values, color=ORANGE, lw=2,
-                ls="--", label="HYPE-BTC (extension)")
-        title_note = "HYPE gap filled from data/hype_daily_extension.csv"
+        ax.annotate(f"{lab}  {s.iloc[-1]:.2f}", (s.index[-1], s.iloc[-1]),
+                    xytext=(6, -3), textcoords="offset points",
+                    fontsize=9, color=color)
+    hype_roll = series[2][1].dropna()
+    if splice is not None:
+        # mark where the HYPE series hands over between the two sources
+        cm_end = cm_r["hype"].dropna().index[-1]
+        ax.axvline(cm_end, color=ORANGE, lw=1, ls=":", alpha=0.8)
+        ax.annotate("source handover", (cm_end, 0.06), xytext=(-4, 0),
+                    textcoords="offset points", fontsize=8, color=ORANGE,
+                    ha="right")
+        title_note = "HYPE now runs through 2026-08-23"
     else:
-        last = cm_r["btc"].rolling(60, min_periods=45).corr(cm_r["hype"]).dropna()
-        ax.annotate("no daily data after 05-23;\nanchor-interval est. ~ +0.3 "
-                    "(n=7, very coarse)",
-                    (hype_end, last.iloc[-1]), xytext=(10, -30),
-                    textcoords="offset points", fontsize=8.5, color=ORANGE)
         title_note = "HYPE daily data ends 2026-05-23"
     ax.axhline(0, color=BASE, lw=1)
-    ax.set_ylim(-0.1, 1.0)
+    ax.set_ylim(-0.1, 1.05)
+    ax.set_xlim(right=hype_roll.index[-1] + pd.Timedelta(days=95))
     ax.set_ylabel("rolling 60-day correlation of daily returns")
     ax.set_title(f"How tightly do they track BTC?  ({title_note})",
                  fontsize=10.5, color=INK, loc="left")
@@ -220,8 +244,9 @@ def fig_rolling(cm_r, api_r):
     ax.xaxis.set_major_locator(loc)
     ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(loc))
     fig.text(0.01, 0.012,
-             "HYPE runs 0.35-0.74 (avg ~0.55): BTC explains under a third of its "
-             "variance. SOL/ETH stay 0.6-0.95 - tight same-day coupling.",
+             f"HYPE runs {hype_roll.min():.2f}-{hype_roll.max():.2f} "
+             f"(now {hype_roll.iloc[-1]:.2f}): BTC explains under a third of its "
+             "variance. SOL/ETH stay 0.55-0.95 - tight same-day coupling.",
              fontsize=8.5, color=MUTED)
     fig.tight_layout(rect=(0, 0.05, 1, 1))
     fig.savefig(os.path.join(FIGS, "fig4_rolling_corr.png"), dpi=150)
