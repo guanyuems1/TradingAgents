@@ -1,8 +1,9 @@
-date,hype_usd,btc_close_usd,source_note
-2026-05-24,58.46,76941,Coin Metrics 最后一个日线点
-2026-06-03,71.39,64377,单日 +22%、市值进前十（Bloomberg 2026-06-03）；BTC 同期下跌
-2026-06-16,76.77,65865,旧 ATH ~$76.7-76.9（CoinGecko，经 web 检索）
-2026-07-15,71.82,64673,测试 ATH；现货 HYPE ETF 累计流入约 $170M（CryptoRank/Yahoo）
-2026-08-16,56.1,63119,周度回撤低点（CoinGecko 7 日前价格）
-2026-08-21,77.62,78129,新 ATH（Trump/CFTC 合规表态，8/19-20 拉升）
-2026-08-23,76.11,77159,现价（CoinGecko，经 web 检索）
+date,hype_usd,btc_close_usd,date_precision,source_note
+2026-05-24,58.46,76941,exact,Coin Metrics 最后一个日线点
+2026-06-03,71.39,64377,exact,单日 +22%、市值进前十（Bloomberg 2026-06-03）；BTC 同期下跌
+2026-06-16,76.77,65865,exact,旧 ATH ~$76.7-76.9（CoinGecko，经 web 检索）
+2026-07-15,71.82,64673,exact,测试 ATH；现货 HYPE ETF 累计流入约 $170M（CryptoRank/Yahoo）
+2026-07-28,54.4,63893,approx_late_july,“7 月下旬 ~$54.40、较 ATH -28%”（crypto.news），日期为约数
+2026-08-16,56.1,63119,exact,周度回撤低点（CoinGecko 7 日前价格）
+2026-08-21,77.62,78129,exact,新 ATH（Trump/CFTC 合规表态，8/19-20 拉升）
+2026-08-23,76.11,77159,exact,现价（CoinGecko，经 web 检索）

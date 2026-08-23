@@ -167,6 +167,20 @@ def fig_equity(cm_r, api_r):
     plt.close(fig)
 
 
+def load_hype_extension():
+    """Daily HYPE log-returns from data/hype_daily_extension.csv, or None.
+
+    The file is produced by fetch_hype_extension.py (run outside the
+    restricted sandbox); its ~00:00 UTC prices pair with the API panel's BTC.
+    """
+    ext_path = os.path.join(DATA, "hype_daily_extension.csv")
+    if not os.path.exists(ext_path):
+        return None
+    ext = pd.read_csv(ext_path, parse_dates=["date"],
+                      index_col="date").sort_index()
+    return np.log(ext["hype_usd"]).diff()
+
+
 def fig_rolling(cm_r, api_r):
     fig, ax = plt.subplots(figsize=(11, 4.0))
     series = [
@@ -179,10 +193,26 @@ def fig_rolling(cm_r, api_r):
         ax.plot(s.index, s.values, color=color, lw=2, label=lab)
         ax.annotate(lab, (s.index[-1], s.iloc[-1]), xytext=(6, -3),
                     textcoords="offset points", fontsize=9, color=color)
+    hype_ext = load_hype_extension()
+    hype_end = cm_r["hype"].dropna().index[-1]
+    if hype_ext is not None:
+        roll_ext = (api_r["btc"].rolling(60, min_periods=45)
+                    .corr(hype_ext).dropna())
+        roll_ext = roll_ext.loc[hype_end:]
+        ax.plot(roll_ext.index, roll_ext.values, color=ORANGE, lw=2,
+                ls="--", label="HYPE-BTC (extension)")
+        title_note = "HYPE gap filled from data/hype_daily_extension.csv"
+    else:
+        last = cm_r["btc"].rolling(60, min_periods=45).corr(cm_r["hype"]).dropna()
+        ax.annotate("no daily data after 05-23;\nanchor-interval est. ~ +0.3 "
+                    "(n=7, very coarse)",
+                    (hype_end, last.iloc[-1]), xytext=(10, -30),
+                    textcoords="offset points", fontsize=8.5, color=ORANGE)
+        title_note = "HYPE daily data ends 2026-05-23"
     ax.axhline(0, color=BASE, lw=1)
     ax.set_ylim(-0.1, 1.0)
     ax.set_ylabel("rolling 60-day correlation of daily returns")
-    ax.set_title("How tightly do they track BTC?  (HYPE data ends 2026-05-23)",
+    ax.set_title(f"How tightly do they track BTC?  ({title_note})",
                  fontsize=10.5, color=INK, loc="left")
     ax.legend(frameon=True, facecolor=SURFACE, edgecolor="none", fontsize=9,
               loc="lower left")

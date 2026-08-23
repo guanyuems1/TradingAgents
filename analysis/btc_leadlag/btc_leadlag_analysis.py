@@ -70,6 +70,22 @@ def load_panels():
     return cm, api, cm_r, api_r
 
 
+def load_hype_extension():
+    """Optional user-supplied daily HYPE closes for the post-2026-05-23 gap.
+
+    Produce data/hype_daily_extension.csv with fetch_hype_extension.py (run
+    outside the restricted sandbox) or any source: one row per day, columns
+    date, hype_usd (~00:00 UTC prices — the API panel's convention, so the
+    BTC leg pairs against api_r["btc"]). Returns hype log-returns or None.
+    """
+    ext_path = os.path.join(DATA, "hype_daily_extension.csv")
+    if not os.path.exists(ext_path):
+        return None
+    ext = pd.read_csv(ext_path, parse_dates=["date"],
+                      index_col="date").sort_index()
+    return np.log(ext["hype_usd"]).diff().rename("hype")
+
+
 # --------------------------------------------------------------------------- #
 # statistics
 # --------------------------------------------------------------------------- #
@@ -329,6 +345,11 @@ def main():
     # HYPE vs BTC on the CM panel (both EOD closes)
     pair_report("HYPE_vs_BTC_cm", cm_r["btc"], cm_r["hype"], results)
     extras_report("HYPE_vs_BTC_cm", cm_r["btc"], cm_r["hype"], results)
+    # optional user-supplied extension covering the post-2026-05-23 gap
+    hype_ext = load_hype_extension()
+    if hype_ext is not None:
+        pair_report("HYPE_vs_BTC_extension", api_r["btc"], hype_ext, results)
+        extras_report("HYPE_vs_BTC_extension", api_r["btc"], hype_ext, results)
     # SOL vs BTC on the API panel (freshest, through 2026-08-23)
     pair_report("SOL_vs_BTC_api", api_r["btc"], api_r["sol"], results)
     extras_report("SOL_vs_BTC_api", api_r["btc"], api_r["sol"], results)
